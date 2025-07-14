@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <title>خريطة الشهداء</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0/dist/chartjs-plugin-datalabels.min.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      display: flex;
+      background-color: #1e1e1e;
+      color: white;
+      font-family: 'Cairo', sans-serif;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #map {
+      position: relative;
+      width: 70%;
+      height: 100vh;
+    }
+    #chartContainer {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(44, 44, 44, 0.85);
+      padding: 10px;
+      border-radius: 8px;
+      width: 280px;
+      color: white;
+      z-index: 1000;
+      user-select: none;
+    }
+    #victimChart {
+      background: transparent !important;
+      width: 280px !important;
+      height: 280px !important;
+    }
+    #controls {
+      width: 30%;
+      padding: 15px;
+      background: #2c2c2c;
+      overflow-y: auto;
+      box-sizing: border-box;
+    }
+    label, select, input, button {
+      display: block;
+      margin-bottom: 10px;
+      width: 100%;
+      background-color: #444;
+      border: none;
+      color: white;
+      padding: 7px;
+      box-sizing: border-box;
+      font-size: 14px;
+    }
+    select[multiple] {
+      height: 100px;
+    }
+    button#clearFilters {
+      background-color: #8b0000;
+      cursor: pointer;
+      font-weight: bold;
+      font-size: 16px;
+      margin-top: 10px;
+      transition: background-color 0.3s ease;
+    }
+    button#clearFilters:hover {
+      background-color: #a50000;
+    }
+    p#count {
+      font-weight: bold;
+      margin-top: 15px;
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="map">
+    <div id="chartContainer">
+      <canvas id="victimChart"></canvas>
+    </div>
+  </div>
+
+  <div id="controls">
+    <label>محافظة الإصابة:</label>
+    <select id="filterGov" multiple></select>
+
+    <label>مكان الإصابة بالجسم:</label>
+    <select id="filterInjuryPlace" multiple></select>
+
+    <label>أداة القتل:</label>
+    <select id="filterWeapon" multiple></select>
+
+    <label>احتجاز الجثمان:</label>
+    <select id="filterBodyHeld">
+      <option value="">الكل</option>
+      <option value="نعم">نعم</option>
+      <option value="لا">لا</option>
+    </select>
+
+    <label>تاريخ الوفاة من:</label>
+    <input type="date" id="dateFrom" />
+
+    <label>إلى:</label>
+    <input type="date" id="dateTo" />
+
+    <label>بحث جزئي بالاسم:</label>
+    <input type="text" id="searchName" />
+
+    <button id="clearFilters">مسح الفلاتر</button>
+
+    <p id="count">عدد النتائج: 0</p>
+  </div>
+
+<script>
+  const map = L.map('map').setView([32, 35], 8);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap & CartoDB',
+    maxZoom: 19,
+    subdomains: 'abcd'
+  }).addTo(map);
+
+  const dataURL = "https://script.google.com/macros/s/AKfycbz4fGp53iiUf4Ksu4wUc3zxC5-zb-OTv3UDzCtDnNWG-YBUBpAZT4fZctW_LfFkZxR08g/exec";
+
+
+  let jsonData = [];
+  let markers = [];
+
+  fetch(dataURL)
+    .then(res => res.json())
+    .then(data => {
+      jsonData = data;
+      populateFilters(data);
+      updateMap();
+    })
+    .catch(err => {
+      console.error("خطأ في تحميل البيانات:", err);
+    });
+
+  function populateFilters(data) {
+    const govSet = new Set();
+    const injuryPlaceSet = new Set();
+    const weaponSet = new Set();
+
+    data.forEach(d => {
+      if(d["محافظة الاصابة"]) govSet.add(d["محافظة الاصابة"]);
+      if(d["مكان الاصابة بالجسم"]) injuryPlaceSet.add(d["مكان الاصابة بالجسم"]);
+      if(d["اداة القتل"]) weaponSet.add(d["اداة القتل"]);
+    });
+
+    fillSelect('filterGov', govSet);
+    fillSelect('filterInjuryPlace', injuryPlaceSet);
+    fillSelect('filterWeapon', weaponSet);
+  }
+
+  function fillSelect(id, items) {
+    const select = document.getElementById(id);
+    select.innerHTML = "";
+    items.forEach(item => {
+      const option = document.createElement("option");
+      option.value = item;
+      option.textContent = item;
+      select.appendChild(option);
+    });
+  }
+
+  function updateMap() {
+    markers.forEach(m => map.removeLayer(m));
+    markers = [];
+
+    const govFilter = Array.from(document.getElementById("filterGov").selectedOptions).map(o => o.value);
+    const injuryFilter = Array.from(document.getElementById("filterInjuryPlace").selectedOptions).map(o => o.value);
+    const weaponFilter = Array.from(document.getElementById("filterWeapon").selectedOptions).map(o => o.value);
+    const heldFilter = document.getElementById("filterBodyHeld").value;
+    const nameSearch = document.getElementById("searchName").value.trim().toLowerCase();
+    const dateFrom = document.getElementById("dateFrom").value;
+    const dateTo = document.getElementById("dateTo").value;
+
+    const filtered = jsonData.filter(d => {
+      let deathDate;
+if (typeof d["تاريخ الوفاة"] === "string" && d["تاريخ الوفاة"].includes('/')) {
+  const parts = d["تاريخ الوفاة"].split('/');
+  if (parts.length === 3) {
+    const [y, m, day] = parts;
+    deathDate = new Date(`${y}-${m.padStart(2, '0')}-${day.padStart(2, '0')}`);
+  } else {
+    deathDate = new Date(d["تاريخ الوفاة"]); // fallback
+  }
+} else {
+  deathDate = new Date(d["تاريخ الوفاة"]);
+}
+
+      let dateValid = (!dateFrom || new Date(dateFrom) <= deathDate) && (!dateTo || deathDate <= new Date(dateTo));
+
+      return (
+        (govFilter.length === 0 || govFilter.includes(d["محافظة الاصابة"])) &&
+        (injuryFilter.length === 0 || injuryFilter.includes(d["مكان الاصابة بالجسم"])) &&
+        (weaponFilter.length === 0 || weaponFilter.includes(d["اداة القتل"])) &&
+        (!heldFilter || d["احتجاز"] === heldFilter) &&
+        (!nameSearch || d["عنوان الملف"].toLowerCase().includes(nameSearch)) &&
+        dateValid &&
+        d.latitude && d.longitude
+      );
+    });
+
+    document.getElementById("count").textContent = "عدد النتائج: " + filtered.length;
+
+    const colors = ['#b71c1c', '#c62828', '#d32f2f', '#e53935', '#f44336', '#ef5350'];
+
+    filtered.forEach((d, idx) => {
+      const lat = parseFloat(d.latitude);
+      const lon = parseFloat(d.longitude);
+      if (!isNaN(lat) && !isNaN(lon)) {
+        const marker = L.circleMarker([lat, lon], {
+          radius: 5,
+          fillColor: colors[idx % colors.length],
+          color: "#880e4f",
+          weight: 1.5,
+          fillOpacity: 0.9
+        }).bindPopup(`
+          <b>${d["عنوان الملف"]}</b><br>
+          تاريخ الوفاة: ${d["تاريخ الوفاة"]}<br>
+          مكان الإصابة: ${d["مكان الاصابة"]}<br>
+          أداة القتل: ${d["اداة القتل"]}<br>
+          احتجاز الجثمان: ${d["احتجاز"]}
+        `);
+        marker.addTo(map);
+        markers.push(marker);
+      }
+    });
+
+    drawChart(filtered);
+  }
+
+  let pieChart;
+  function drawChart(data) {
+    const ctx = document.getElementById("victimChart").getContext("2d");
+    const counts = {};
+    data.forEach(d => {
+      const key = d["صنف الضحية"] || "غير معروف";
+      counts[key] = (counts[key] || 0) + 1;
+    });
+
+    if (pieChart) pieChart.destroy();
+    pieChart = new Chart(ctx, {
+      type: 'pie',
+      data: {
+        labels: Object.keys(counts),
+        datasets: [{
+          data: Object.values(counts),
+          backgroundColor: ['#b71c1c', '#c62828', '#d32f2f', '#e53935', '#f44336', '#ef5350'],
+          hoverOffset: 8
+        }]
+      },
+      options: {
+        plugins: {
+          legend: { display: false },
+          datalabels: {
+            color: 'white',
+            font: {
+              weight: 'bold',
+              size: 14
+            },
+            formatter: (value, ctx) => {
+              let label = ctx.chart.data.labels[ctx.dataIndex];
+              return `${value} - ${label}`;
+            }
+          }
+        },
+        onHover: (e) => {
+          e.native.target.style.cursor = 'pointer';
+        }
+      },
+      plugins: [ChartDataLabels]
+    });
+  }
+
+  document.querySelectorAll("select, input").forEach(el => {
+    el.addEventListener("change", updateMap);
+    el.addEventListener("input", updateMap);
+  });
+
+  document.getElementById("clearFilters").addEventListener("click", () => {
+    document.getElementById("filterGov").selectedIndex = -1;
+    document.getElementById("filterInjuryPlace").selectedIndex = -1;
+    document.getElementById("filterWeapon").selectedIndex = -1;
+    document.getElementById("filterBodyHeld").value = "";
+    document.getElementById("dateFrom").value = "";
+    document.getElementById("dateTo").value = "";
+    document.getElementById("searchName").value = "";
+
+    updateMap();
+  });
+</script>
+
+</body>
+</html>
+
